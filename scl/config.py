@@ -2,7 +2,7 @@
 
 # pretrain 
 _config_pretrain = {
-    'exp_name': "mlm_itm_cl_scl",
+    'exp_name': "mlm_itm_cl_mgsc_mltc",
     'seed': 0,
     # 'datasets': ["coco", "vg", "sbu", "gcc"], 
     'datasets': ["coco", "vg"], 
@@ -15,7 +15,8 @@ _config_pretrain = {
         "irtr": 0,
         "mae": 0,
         "con": 1,
-        "scl": 1,
+        "mgsc": 1, # global
+        "mltc": 1, # local
         },
     'batch_size': 4096,  # this is a desired batch size; pl trainer will accumulate gradients when per step batch is smaller.
 
@@ -50,8 +51,9 @@ _config_pretrain = {
 
     # mae transformer settings
     'vit_path': "/apdcephfs/share_1367250/auroraji/pretrained_weight/clip-vit/ViT-B-16.pt",
-    'mask_ratio': 0.8,
-    'mtm_ratio': 0.4,
+    'mask_ratio': 0.8, # mgsc image mask ratio
+    'mtm_ratio': 0.4, # text mask ratio
+    'image_token_mask_ratio': 0.3, # mltc image mask ratio
 
     # Optimizer Setting
     'optim_type': "adamw",

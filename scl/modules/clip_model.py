@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from typing import Tuple, Union
+import random
 
 import numpy as np
 import torch
@@ -75,6 +76,7 @@ class VisualTransformer(nn.Module):
 
         scale = width ** -0.5
         self.class_embedding = nn.Parameter(scale * torch.randn(width))
+        self.visual_mask_token = nn.Parameter(torch.randn(1, width))
         self.positional_embedding = nn.Parameter(scale * torch.randn((resolution_after // patch_size) ** 2 + 1, width))
         self.ln_pre = LayerNorm(width)
 
@@ -120,30 +122,64 @@ class VisualTransformer(nn.Module):
 
         return x_masked, mask, ids_restore
 
+    # def mvm_masking(self, x, mask_ratio):
+    #     N, L, D = x.shape  # batch, length, dim
+    #     ids_mask = torch.zeros((N, L))
+    #     mask_len = int(L * mask_ratio)
+    #     for i in range(N):
+    #         mask_index = random.sample(list(range(L)), mask_len)
+    #         ids_mask[i, mask_index] = 1
+    #     ids_mask = ids_mask.bool()
+    #     x[ids_mask] = self.visual_mask_token.type(x.dtype)
 
-    def visual_embed(self, x, is_pretrain, mask_ratio):
+    #     return x, ids_mask
+
+    def mvm_masking(self, x, mask_ratio):
+        N, L, D = x.shape  # batch, length, dim
+        ids_mask = torch.zeros((N, L))
+        mask_len = int(L * mask_ratio)
+        for i in range(N):
+            mask_index = random.sample(list(range(L)), mask_len)
+            ids_mask[i, mask_index] = 1
+
+        x = x.reshape(-1, D)
+        ids_mask = ids_mask.reshape(-1)
+        idx_mask = torch.where(ids_mask > 0.5)[0]
+        x[idx_mask] = self.visual_mask_token.type(x.dtype).expand((len(idx_mask), D))
+        x = x.reshape(N, L, D)
+        ids_mask = ids_mask.reshape(N, L).bool()
+        # ids_mask = ids_mask.bool()
+        # x[ids_mask] = self.visual_mask_token.type(x.dtype)
+
+        return x, ids_mask
+
+    def visual_embed(self, x, is_mask, mask_ratio, token_mask=False):
         # embed patches
         x = self.conv1(x)  # shape = [*, width, grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
-        if is_pretrain:
-        # if False: # wo mae
+        if is_mask:
+            # masking with mask tokens
+            if token_mask:
+                x, ids_mask = self.mvm_masking(x, mask_ratio)
+
             # add pos embed w/o cls token
             x = x + self.positional_embedding[1:, :].to(x.dtype)
 
-            # masking: length -> length * mask_ratio
-            x, mask, ids_restore = self.random_masking(x, mask_ratio)
+            # masking:
+            if not token_mask:
+                x, ids_mask, ids_restore = self.random_masking(x, mask_ratio)
 
             # append cls token
             cls_token = self.class_embedding.to(x.dtype) + self.positional_embedding[:1, :].to(x.dtype)
             cls_tokens = cls_token.expand(x.shape[0], -1, -1)
             x = torch.cat((cls_tokens, x), dim=1)
-            return x, mask, ids_restore
+            return x, ids_mask
         else:
             t = self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device)
             x = torch.cat([t, x], dim=1)  # shape = [*, grid ** 2 + 1, width]
             x = x + self.positional_embedding.to(x.dtype)
-            return x, None, None
+            return x, None
 
 
 class CLIP(nn.Module):

@@ -190,7 +190,118 @@ def compute_itm(pl_module, batch):
 
     return ret
 
-def compute_scl(pl_module, batch):
+# global + local completion
+def compute_scl(pl_module, batch, token_recover=False):
+    # mask image
+    infer = pl_module.infer(batch, mask_image=True)
+    mask_image_feat_cls = infer['cross_image_feat']
+    text_feat_cls = infer['cross_text_feat']
+    text_feats = infer['text_feats']
+
+    if token_recover:
+        infer = pl_module.infer(batch, mask_image=True, token_mask_ratio=pl_module.hparams.config["image_token_mask_ratio"])
+        mask_image_feats = infer['image_feats']
+        image_ids_mask = infer['ids_mask']
+
+    # mask text
+    device = batch['text_ids'].device
+    mtm_ratio = pl_module.hparams.config["mtm_ratio"]
+    input_ids = np.array(batch['input_ids'])
+    text_len = batch['text_masks'].sum(1).cpu().numpy()
+    bs = batch['text_masks'].shape[0]
+    text_ids_mask = torch.zeros((bs, batch['text_masks'].shape[1])).to(device)
+    for i in range(bs):
+        mask_len = int((text_len[i]-2) * mtm_ratio) + 1
+        if text_len[i] > 2:
+            mask_index = np.random.randint(1, text_len[i]-1, size=mask_len)
+            input_ids[i][mask_index] = 50264 # mask
+            text_ids_mask[i, mask_index] = 1
+    batch['text_ids'] = torch.from_numpy(input_ids).to(device)
+    text_ids_mask = text_ids_mask.bool()
+
+    infer = pl_module.infer(batch)
+    mask_text_feat_cls = infer["cross_text_feat"]
+    image_feat_cls = infer['cross_image_feat']
+    image_feats = infer['image_feats']
+    mask_text_feats = infer['text_feats']
+
+    # process
+    allgather = AllGather_multi.apply
+    text_feats = text_feats.detach()
+    text_feats_n  = text_feats.norm(dim=-1).unsqueeze(-1)
+    text_feats = text_feats / torch.max(text_feats_n, 1e-8 * torch.ones_like(text_feats_n))
+    mask_text_feats_n  = mask_text_feats.norm(dim=-1).unsqueeze(-1)
+    mask_text_feats = mask_text_feats / torch.max(mask_text_feats_n, 1e-8 * torch.ones_like(mask_text_feats_n))
+
+    text_feat_cls = text_feats[:, 0]
+    text_feats = allgather(text_feats)
+    mask_text_feat_cls = mask_text_feats[:, 0]
+    mask_text_feats = allgather(mask_text_feats)
+
+    text_ids_mask = allgather(text_ids_mask)
+
+    image_feat_cls = image_feat_cls.detach()
+    image_feat_cls_n  = image_feat_cls.norm(dim=-1).unsqueeze(-1)
+    image_feat_cls = image_feat_cls / torch.max(image_feat_cls_n, 1e-8 * torch.ones_like(image_feat_cls_n))
+    mask_image_feat_cls_n  = mask_image_feat_cls.norm(dim=-1).unsqueeze(-1)
+    mask_image_feat_cls = mask_image_feat_cls / torch.max(mask_image_feat_cls_n, 1e-8 * torch.ones_like(mask_image_feat_cls_n))
+
+    image_feat_cls = allgather(image_feat_cls)
+    mask_image_feat_cls = allgather(mask_image_feat_cls)
+
+    # msm cls contrast
+    sim_mt_img = torch.mm(mask_image_feat_cls, image_feat_cls.transpose(0, 1))
+    sim_mt_txt = torch.mm(mask_text_feat_cls, text_feat_cls.transpose(0, 1))
+    loss_contrastive_func = NormSoftmaxLoss(pl_module.msm_temp)
+    con_img_loss = loss_contrastive_func(sim_mt_img)
+    con_txt_loss = loss_contrastive_func(sim_mt_txt)
+
+
+    # msm cls l2loss
+    # con_img_loss = (mask_image_feat_cls - image_feat_cls).pow(2).sum(-1).mean()
+    # con_txt_loss = (mask_text_feat_cls - text_feat_cls).pow(2).sum(-1).mean()
+
+    # # msm cls cosloss
+    # con_img_loss = -torch.log(0.5 * (mask_image_feat_cls * image_feat_cls).sum(-1) + 0.5).mean()
+    # con_txt_loss = -torch.log(0.5 * (mask_text_feat_cls * text_feat_cls).sum(-1) + 0.5).mean()
+
+    msm_loss = con_img_loss + con_txt_loss
+
+    # msm local tokens contrast
+    if token_recover:
+        mask_text_tokens = mask_text_feats[text_ids_mask]
+        text_tokens_gt = text_feats[text_ids_mask]
+        sim_token_txt = torch.mm(mask_text_tokens, text_tokens_gt.transpose(0, 1))
+        text_tokens_loss = loss_contrastive_func(sim_token_txt)
+
+        mask_image_tokens = mask_image_feats[:, 1:][image_ids_mask]
+        image_tokens_gt = image_feats[:, 1:][image_ids_mask].detach()
+        mask_image_tokens = F.normalize(mask_image_tokens, dim=-1)
+        image_tokens_gt = F.normalize(image_tokens_gt, dim=-1)
+
+        sim_token_img = torch.mm(mask_image_tokens, image_tokens_gt.transpose(0, 1))
+        image_tokens_loss = loss_contrastive_func(sim_token_img)
+
+        if not torch.isnan(image_tokens_loss):
+            msm_loss = msm_loss + 0.2 * image_tokens_loss
+        if not torch.isnan(text_tokens_loss):
+            msm_loss = msm_loss + 0.2 * text_tokens_loss
+    
+    ret = {'msm_loss': msm_loss}
+
+    phase = "train" if pl_module.training else "val"
+    msm_loss = getattr(pl_module, f"{phase}_msm_loss")(ret["msm_loss"])
+    pl_module.log(f"msm/{phase}/loss", msm_loss)
+    if token_recover:
+        pl_module.log(f"msm/{phase}/image_tokens_loss", image_tokens_loss)
+        pl_module.log(f"msm/{phase}/text_tokens_loss", text_tokens_loss)
+    pl_module.log(f"msm/{phase}/con_img_loss", con_img_loss)
+    pl_module.log(f"msm/{phase}/con_txt_loss", con_txt_loss)
+
+    return ret
+
+# mgsc for video
+def compute_scl_video(pl_module, batch):
 
     # mask image
     infer = pl_module.infer(batch, mask_image=True)

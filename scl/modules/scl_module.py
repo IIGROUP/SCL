@@ -6,8 +6,8 @@ from scl.modules import mae_transformer as vit
 from transformers.models.bert.modeling_bert import BertConfig, BertEmbeddings, BertModel
 from transformers import RobertaConfig, RobertaModel
 from scl.modules import heads, objectives, scl_utils
-# from .clip_model import build_model, adapt_position_encoding # for image
-from .clip_model_video import build_model, adapt_position_encoding # for video and image
+from .clip_model import build_model, adapt_position_encoding 
+# from .clip_model_video import build_model, adapt_position_encoding
 from .bert_model import BertCrossLayer
 
 class SCLTransformer(pl.LightningModule):
@@ -140,7 +140,8 @@ class SCLTransformer(pl.LightningModule):
                 state_dict = ckpt["state_dict"]
             state_dict = adapt_position_encoding(state_dict, after=config['image_size'], patch_size=config['patch_size'])
             self.load_state_dict(state_dict, strict=False)
-
+            
+    # image
     def infer(
         self,
         batch,
@@ -151,6 +152,7 @@ class SCLTransformer(pl.LightningModule):
         use_mae = False,
         contrast = False,
         mask_image = False,
+        token_mask_ratio = None
     ):
 
         if f"image_{image_token_type_idx - 1}" in batch:
@@ -173,20 +175,21 @@ class SCLTransformer(pl.LightningModule):
 
         if image_embeds is None and image_masks is None:
             img = batch[imgkey][0]
-            n_frames = img.shape[1]
-            image_embeds, mask, ids_restore = self.vision_transformer.visual.visual_embed(img, mask_image, self.mask_ratio)
+            if token_mask_ratio != None: # token mask
+                image_embeds, ids_mask = self.vision_transformer.visual.visual_embed(img, mask_image, token_mask_ratio, token_mask=True)
+            else:
+                image_embeds, ids_mask = self.vision_transformer.visual.visual_embed(img, mask_image, self.mask_ratio)
             image_masks = torch.ones((image_embeds.shape[0], image_embeds.shape[1]),
                                      dtype=torch.long, device=text_masks.device)
         else:
             img = None
-            mask = None
-            ids_restore = None
-        image_embeds = self.vision_transformer(image_embeds, n_frames=n_frames)
+            ids_mask = None
+        image_embeds = self.vision_transformer(image_embeds)
         image_embeds = self.cross_modal_image_transform(image_embeds)
         extend_image_masks = self.text_transformer.get_extended_attention_mask(image_masks, image_masks.size(), device)
 
         if contrast:
-            return {'text_embeds': text_embeds[:,0], 'image_embeds': image_embeds[:,0:n_frames].mean(1)}
+            return {'text_embeds': text_embeds[:,0], 'image_embeds': image_embeds[:,0]}
 
         text_embeds, image_embeds = (
             text_embeds + self.token_type_embeddings(torch.zeros_like(text_masks)),
@@ -204,26 +207,116 @@ class SCLTransformer(pl.LightningModule):
 
         text_feats, image_feats = x, y
         cls_feats_text = self.cross_modal_text_pooler(x)
-        cls_feats_image = self.cross_modal_image_pooler(y, n_frames)
+        cls_feats_image = self.cross_modal_image_pooler(y)
         cls_feats = torch.cat([cls_feats_text, cls_feats_image], dim=-1)
 
-        # for scl
-        cross_image_feat = image_feats[:, 0:n_frames]
+        # for msm
         cross_text_feat = text_feats[:, 0]
+        cross_image_feat = image_feats[:, 0]
 
 
         ret = {
             "text_feats": text_feats,
             "cross_text_feat": cross_text_feat,
             "cross_image_feat": cross_image_feat,
+            # "image_embeds": image_embeds,
             "image_feats": image_feats,
             "cls_feats": cls_feats,
+            # "raw_cls_feats": x[:, 0],
+            "image_masks": image_masks,
             "text_labels": text_labels,
             "text_ids": text_ids,
             "text_masks": text_masks,
+            "ids_mask": ids_mask,
         }
 
         return ret
+
+    # video 
+    # from .clip_model_video import build_model, adapt_position_encoding 
+    # def infer(
+    #     self,
+    #     batch,
+    #     mask_text=False,
+    #     image_token_type_idx=1,
+    #     image_embeds = None,
+    #     image_masks = None,
+    #     use_mae = False,
+    #     contrast = False,
+    #     mask_image = False,
+    # ):
+
+    #     if f"image_{image_token_type_idx - 1}" in batch:
+    #         imgkey = f"image_{image_token_type_idx - 1}"
+    #     else:
+    #         imgkey = "image"
+
+    #     do_mlm = "_mlm" if mask_text else ""
+    #     text_ids = batch[f"text_ids{do_mlm}"]
+    #     text_labels = batch[f"text_labels{do_mlm}"]
+    #     text_masks = batch[f"text_masks"]
+        
+    #     text_embeds = self.text_transformer.embeddings(input_ids=text_ids)
+    #     device = text_embeds.device
+    #     input_shape = text_masks.size()
+    #     extend_text_masks = self.text_transformer.get_extended_attention_mask(text_masks, input_shape, device) # [bs,len] -> [bs,1,1,len]
+    #     for layer in self.text_transformer.encoder.layer:
+    #         text_embeds = layer(text_embeds, extend_text_masks)[0]
+    #     text_embeds = self.cross_modal_text_transform(text_embeds)
+
+    #     if image_embeds is None and image_masks is None:
+    #         img = batch[imgkey][0]
+    #         n_frames = img.shape[1]
+    #         image_embeds, mask, ids_restore = self.vision_transformer.visual.visual_embed(img, mask_image, self.mask_ratio)
+    #         image_masks = torch.ones((image_embeds.shape[0], image_embeds.shape[1]),
+    #                                  dtype=torch.long, device=text_masks.device)
+    #     else:
+    #         img = None
+    #         mask = None
+    #         ids_restore = None
+    #     image_embeds = self.vision_transformer(image_embeds, n_frames=n_frames)
+    #     image_embeds = self.cross_modal_image_transform(image_embeds)
+    #     extend_image_masks = self.text_transformer.get_extended_attention_mask(image_masks, image_masks.size(), device)
+
+    #     if contrast:
+    #         return {'text_embeds': text_embeds[:,0], 'image_embeds': image_embeds[:,0:n_frames].mean(1)}
+
+    #     text_embeds, image_embeds = (
+    #         text_embeds + self.token_type_embeddings(torch.zeros_like(text_masks)),
+    #         image_embeds
+    #         + self.token_type_embeddings(
+    #             torch.full_like(image_masks, image_token_type_idx)
+    #         ),
+    #     )
+
+    #     x, y = text_embeds, image_embeds
+    #     for text_layer, image_layer in zip(self.cross_modal_text_layers, self.cross_modal_image_layers):
+    #         x1 = text_layer(x, y, extend_text_masks, extend_image_masks)
+    #         y1 = image_layer(y, x, extend_image_masks, extend_text_masks)
+    #         x, y = x1[0], y1[0]
+
+    #     text_feats, image_feats = x, y
+    #     cls_feats_text = self.cross_modal_text_pooler(x)
+    #     cls_feats_image = self.cross_modal_image_pooler(y, n_frames)
+    #     cls_feats = torch.cat([cls_feats_text, cls_feats_image], dim=-1)
+
+    #     # for scl
+    #     cross_image_feat = image_feats[:, 0:n_frames]
+    #     cross_text_feat = text_feats[:, 0]
+
+
+    #     ret = {
+    #         "text_feats": text_feats,
+    #         "cross_text_feat": cross_text_feat,
+    #         "cross_image_feat": cross_image_feat,
+    #         "image_feats": image_feats,
+    #         "cls_feats": cls_feats,
+    #         "text_labels": text_labels,
+    #         "text_ids": text_ids,
+    #         "text_masks": text_masks,
+    #     }
+
+    #     return ret
 
     def forward(self, batch): 
         ret = dict()
@@ -244,8 +337,11 @@ class SCLTransformer(pl.LightningModule):
             ret.update(objectives.compute_con(self, batch))
 
         # masked semantic modeling (scl)
-        if "scl" in self.current_tasks: 
-            ret.update(objectives.compute_scl(self, batch))
+        if "mgsc" in self.current_tasks: 
+            if "mltc" in self.current_tasks: 
+                ret.update(objectives.compute_scl(self, batch, token_recover=True))
+            else:
+                ret.update(objectives.compute_scl(self, batch))
 
         # Visual Question Answering
         if "vqa" in self.current_tasks:
