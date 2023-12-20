@@ -15,6 +15,8 @@ pip install -r requirements.txt
 
 Our pre-trained and fine-tuned model weights can be downloaded at [huggingface/SCL](https://huggingface.co/jiyatai/SCL).
 
+Our developed ALIGN-BENCH can be gained at [huggingface/ALIGN-BENCH](https://huggingface.co/datasets/jiyatai/ALIGN-BENCH).
+
 ## Dataset Preparation
 
 We follow [ViLT](https://github.com/dandelin/ViLT) and use `pyarrow` to serialize the datasets. See [this link](https://github.com/dandelin/ViLT/blob/master/DATA.md) for details.
