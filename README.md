@@ -15,7 +15,7 @@ pip install -r requirements.txt
 
 Our pre-trained and fine-tuned model weights can be downloaded at [huggingface/SCL](https://huggingface.co/jiyatai/SCL).
 
-Our developed ALIGN-BENCH can be gained at [huggingface/ALIGN-BENCH](https://huggingface.co/datasets/jiyatai/ALIGN-BENCH).
+Our developed cross-modal alignment benchmark can be gained at [huggingface/ALIGN-BENCH](https://huggingface.co/datasets/jiyatai/ALIGN-BENCH).
 
 ## Dataset Preparation
 
