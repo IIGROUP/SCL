@@ -1,6 +1,6 @@
 # Seeing What You Miss: Vision-Language Pre-training with Semantic Completion Learning
 
-This is a PyTorch/GPU implementation of the paper [SCL](https://arxiv.org/pdf/2211.13437.pdf). 
+This is a PyTorch/GPU implementation of the paper [SCL](https://arxiv.org/pdf/2211.13437.pdf) and its extension version [GLSCL](https://arxiv.org/abs/2306.07096). 
 
 
 ## Install
@@ -10,6 +10,10 @@ Our environment: CUDA11.3, torch1.11.0, torchvision0.12.0.
 ```bash
 pip install -r requirements.txt
 ```
+
+In our further experiments of the extension journal, we use a newer environment: CUDA11.7, torch2.0, Pytorch-Lightning2.0.
+
+The pytorch and lightning version relation can be found at [here](https://lightning.ai/docs/pytorch/stable/versioning.html).
 
 ## Weights and ALIGN-BENCH
 
