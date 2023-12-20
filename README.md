@@ -11,6 +11,10 @@ Our environment: CUDA11.3, torch1.11.0, torchvision0.12.0.
 pip install -r requirements.txt
 ```
 
+## Weights and ALIGN-BENCH
+
+Our pre-trained and fine-tuned model weights can be downloaded at [huggingface/SCL](https://huggingface.co/jiyatai/SCL).
+
 ## Dataset Preparation
 
 We follow [ViLT](https://github.com/dandelin/ViLT) and use `pyarrow` to serialize the datasets. See [this link](https://github.com/dandelin/ViLT/blob/master/DATA.md) for details.
