@@ -41,6 +41,14 @@ Note that 'plugins=[MyCluster(), MyDDPPlugin()]' of pl.Trainer(run.py) is used i
 python run.py --task vqa/nlvr2/f30k/coco/msrvtt/lsmdc
 ```
 
+## Visualization and Quantify
+
+```bash
+python visualize_global.py # global-local cross-modal visualization
+python visualize_local.py # local-local cross-modal visualization
+python align_global.py # global-local cross-modal alignment quantify on ALIGN-BENCH
+python align_local.py # local-local cross-modal alignment quantify on ALIGN-BENCH
+```
 
 ## Acknowledgements
 
